@@ -14,7 +14,6 @@ jobs:
         uses: actions/checkout@v4
         with:
           path: recipe
-
       - name: Check out SharpDroid and its submodules
         uses: actions/checkout@v4
         with:
@@ -22,7 +21,6 @@ jobs:
           ref: 04be4fd260b8b2547e281056398fac390e80278c
           path: sharpdroid
           submodules: recursive
-
       - name: Check out the Android-supported SharpEmu fork
         uses: actions/checkout@v4
         with:
@@ -41,7 +39,6 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-
       - name: Set up .NET SDK
         uses: actions/setup-dotnet@v4
         with:
@@ -51,12 +48,13 @@ jobs:
         uses: android-actions/setup-android@v4
         with:
           packages: 'platform-tools'
-
       - name: Install the Android toolchain pinned by SharpDroid
         shell: bash
         run: |
           set -euo pipefail
+          set +o pipefail
           yes | sdkmanager --licenses >/dev/null
+          set -o pipefail
           sdkmanager \
             "platform-tools" \
             "platforms;android-35" \
@@ -71,7 +69,6 @@ jobs:
             echo "SHARPDROID_DOTNET=$DOTNET_ROOT"
             echo "SHARPDROID_SHARPEMU=$GITHUB_WORKSPACE/sharpemu"
           } >> "$GITHUB_ENV"
-
       - name: Apply the reserve-virtual-range patch
         working-directory: sharpemu
         shell: bash
@@ -81,7 +78,6 @@ jobs:
           git apply ../recipe/fix-reserve-virtual-range.patch
           git diff --check
           git status --short
-
       - name: Build and package the patched SharpEmu payload
         working-directory: sharpdroid
         shell: bash
@@ -96,7 +92,6 @@ jobs:
           test -d "$BUILD_DIR/plugins"
           echo "SHARPEMU_BUILD_DIR=$GITHUB_WORKSPACE/sharpdroid/$BUILD_DIR" >> "$GITHUB_ENV"
           echo "Packaged SharpEmu payload: $BUILD_DIR"
-
       - name: Build the complete Android APK
         working-directory: sharpdroid
         shell: bash
@@ -107,7 +102,6 @@ jobs:
           test -n "$APK"
           echo "APK_PATH=$GITHUB_WORKSPACE/sharpdroid/$APK" >> "$GITHUB_ENV"
           ls -lh "$APK"
-
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
