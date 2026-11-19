@@ -1,0 +1,80 @@
+name: Build SharpEmu for SharpDroid (reserve-range fix)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout this repository (the patch)
+        uses: actions/checkout@v4
+        with:
+          path: recipe
+
+      - name: Checkout SharpDroid (its packaging scripts)
+        uses: actions/checkout@v4
+        with:
+          repository: mircowuffwuff/sharpdroid
+          ref: 04be4fd260b8b2547e281056398fac390e80278c
+          path: sharpdroid
+
+      - name: Checkout the SharpEmu fork at the commit the bundled build uses
+        uses: actions/checkout@v4
+        with:
+          repository: mircowuffwuff/sharpemu
+          ref: f44351ffdb46d11752c197768c77e0b81eff399f
+          path: sharpemu
+          fetch-depth: 0
+
+      - name: Apply the patch on a local branch
+        working-directory: sharpemu
+        run: |
+          git config user.name "ci"
+          git config user.email "ci@users.noreply.github.com"
+          git checkout -b android-vmfix
+          git apply --index ../recipe/fix-reserve-virtual-range.patch
+          git commit -m "fix: reserve the largest virtual range the host can hold"
+          git log --oneline -2
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: sharpemu/global.json
+
+      - name: Publish and package the build
+        env:
+          SHARPDROID_SHARPEMU: ${{ github.workspace }}/sharpemu
+          SHARPDROID_DOTNET: ${{ env.DOTNET_ROOT }}
+        run: |
+          python3 sharpdroid/scripts/package-build.py \
+            --branch android-vmfix \
+            --name "SharpEmu android (reserve-range fix)" \
+            --notes "reserves the largest virtual range the host can hold instead of refusing"
+
+      - name: Find the packaged zip
+        id: zip
+        run: |
+          find sharpdroid/build -maxdepth 4 | head -50
+          ZIP="$(find sharpdroid/build -name '*.zip' | head -1)"
+          echo "zip=$ZIP" >> "$GITHUB_OUTPUT"
+          echo "found: $ZIP"
+          test -n "$ZIP"
+
+      - name: Upload as an artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sharpemu-build
+          path: ${{ steps.zip.outputs.zip }}
+
+      - name: Publish as a release (a direct download link)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "vmfix-${{ github.run_number }}" "${{ steps.zip.outputs.zip }}" \
+            --repo "${{ github.repository }}" \
+            --title "SharpEmu build with the reserve-range fix (run ${{ github.run_number }})" \
+            --notes "Built from mircowuffwuff/sharpemu f44351f plus fix-reserve-virtual-range.patch"
