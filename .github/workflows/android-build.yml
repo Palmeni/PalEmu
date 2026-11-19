@@ -4,18 +4,18 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  build:
+  build-apk:
     runs-on: ubuntu-24.04
     steps:
-      - name: Checkout patch recipe
+      - name: Check out this repository (patch)
         uses: actions/checkout@v4
         with:
           path: recipe
 
-      - name: Checkout SharpDroid with its submodules
+      - name: Check out SharpDroid and its submodules
         uses: actions/checkout@v4
         with:
           repository: mircowuffwuff/sharpdroid
@@ -23,7 +23,7 @@ jobs:
           path: sharpdroid
           submodules: recursive
 
-      - name: Checkout Android-supported SharpEmu
+      - name: Check out the Android-supported SharpEmu fork
         uses: actions/checkout@v4
         with:
           repository: mircowuffwuff/sharpemu
@@ -42,7 +42,7 @@ jobs:
           distribution: temurin
           java-version: '21'
 
-      - name: Set up .NET
+      - name: Set up .NET SDK
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.103'
@@ -50,9 +50,10 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Install pinned Android build tools
+      - name: Install the Android toolchain pinned by SharpDroid
         shell: bash
         run: |
+          set -euo pipefail
           yes | sdkmanager --licenses >/dev/null
           sdkmanager \
             "platform-tools" \
@@ -69,54 +70,46 @@ jobs:
             echo "SHARPDROID_SHARPEMU=$GITHUB_WORKSPACE/sharpemu"
           } >> "$GITHUB_ENV"
 
-      - name: Apply reserve-range patch to SharpEmu
+      - name: Apply the reserve-virtual-range patch
         working-directory: sharpemu
         shell: bash
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git checkout -b android-vmfix
+          set -euo pipefail
           git apply --check ../recipe/fix-reserve-virtual-range.patch
-          git apply --index ../recipe/fix-reserve-virtual-range.patch
-          git commit -m "fix: reserve the largest virtual range the host can hold"
+          git apply ../recipe/fix-reserve-virtual-range.patch
+          git diff --check
+          git status --short
 
-      - name: Build and package patched SharpEmu
+      - name: Build and package the patched SharpEmu payload
         working-directory: sharpdroid
         shell: bash
         run: |
-          python3 scripts/package-build.py \
-            --branch android-vmfix \
+          set -euo pipefail
+          python3 scripts/package-build.py --branch android \
             --name "SharpEmu Android (reserve-range fix)" \
-            --notes "Android-supported SharpEmu with the reserve-range fallback patch."
-          BUILD_DIR="$(find build/builds -mindepth 1 -maxdepth 1 -type d -print | sort | tail -n 1)"
+            --notes "Android SharpEmu build with the reserve-virtual-range fallback patch."
+          BUILD_DIR="$(find build/builds -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' | sort -nr | head -n 1 | cut -d' ' -f2-)"
           test -n "$BUILD_DIR"
+          test -f "$BUILD_DIR/SharpEmu"
+          test -d "$BUILD_DIR/plugins"
           echo "SHARPEMU_BUILD_DIR=$GITHUB_WORKSPACE/sharpdroid/$BUILD_DIR" >> "$GITHUB_ENV"
-          echo "Packaged build: $BUILD_DIR"
+          echo "Packaged SharpEmu payload: $BUILD_DIR"
 
-      - name: Build Android APK
+      - name: Build the complete Android APK
         working-directory: sharpdroid
         shell: bash
         run: |
+          set -euo pipefail
           python3 scripts/build.py --sharpemu "$SHARPEMU_BUILD_DIR"
-          APK="$(find build/apk -maxdepth 1 -type f -name '*.apk' -print | head -n 1)"
+          APK="$(find build -type f -name '*.apk' -print -quit)"
           test -n "$APK"
           echo "APK_PATH=$GITHUB_WORKSPACE/sharpdroid/$APK" >> "$GITHUB_ENV"
           ls -lh "$APK"
 
-      - name: Upload APK artifact
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: sharpdroid-vmfix-apk
           path: ${{ env.APK_PATH }}
           if-no-files-found: error
           retention-days: 30
-
-      - name: Publish APK release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          gh release create "sharpdroid-vmfix-${{ github.run_number }}" "$APK_PATH" \
-            --repo "$GITHUB_REPOSITORY" \
-            --title "SharpDroid APK with reserve-range fix (run ${{ github.run_number }})" \
-            --notes "APK built from SharpDroid with the reserve-range fallback patch applied to its Android-supported SharpEmu build."
