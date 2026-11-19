@@ -77,4 +77,4 @@ jobs:
           gh release create "vmfix-${{ github.run_number }}" "${{ steps.zip.outputs.zip }}" \
             --repo "${{ github.repository }}" \
             --title "SharpEmu build with the reserve-range fix (run ${{ github.run_number }})" \
-            --notes "Built from mircowuffwuff/sharpemu f44351f plus fix-reserve-virtual-range.patch"
+            --notes "Built from mircowuffwuff
