@@ -1,0 +1,120 @@
+diff --git a/src/SharpEmu.Libs/Kernel/KernelRuntimeCompatExports.cs b/src/SharpEmu.Libs/Kernel/KernelRuntimeCompatExports.cs
+index cd9a7ac..b8f1d1a 100644
+--- a/src/SharpEmu.Libs/Kernel/KernelRuntimeCompatExports.cs
++++ b/src/SharpEmu.Libs/Kernel/KernelRuntimeCompatExports.cs
+@@ -766,6 +766,7 @@ public static class KernelRuntimeCompatExports
+         var alreadyBacked = fixedMapping && requestedAddress != 0 &&
+             KernelMemoryCompatExports.IsGuestRangeBacked(ctx, requestedAddress, length);
+         ulong mappedAddress;
++        var reservedLength = length;
+         if (reusedReleasedRange)
+         {
+             mappedAddress = releasedAddress;
+@@ -782,7 +783,24 @@ public static class KernelRuntimeCompatExports
+                      allowSearch: !fixedMapping,
+                      out mappedAddress))
+         {
+-            return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_NOT_FOUND;
++            // The host could not hold the whole range. A title that claims all of a 39-bit space (Unreal
++            // Engine's pool asks for 512 GiB) cannot be given that on a host whose own space is 39 bits,
++            // and does not check the refusal: it dereferences null a moment later. A reservation is only a
++            // claim on address space, so hand back the largest share that fits and say so.
++            if (fixedMapping ||
++                !KernelVirtualRangeFallback.TryReserveLargestFit(
++                    length,
++                    effectiveAlignment,
++                    (ulong fitLength, out ulong fitAddress) => TryReserveVirtualRange(
++                        ctx, desiredAddress, fitLength, effectiveAlignment, allowSearch: true, out fitAddress),
++                    out mappedAddress,
++                    out reservedLength))
++            {
++                return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_NOT_FOUND;
++            }
++
++            Console.Error.WriteLine(
++                $"[LOADER][WARN] reserve_virtual_range: the host cannot hold 0x{length:X} bytes of address space; reserved 0x{reservedLength:X} at 0x{mappedAddress:X16} instead");
+         }
+ 
+         if (ShouldTraceVirtualMemory())
+@@ -798,10 +816,10 @@ public static class KernelRuntimeCompatExports
+ 
+         lock (_stateGate)
+         {
+-            _nextReservedVirtualBase = Math.Max(_nextReservedVirtualBase, mappedAddress + length);
++            _nextReservedVirtualBase = Math.Max(_nextReservedVirtualBase, mappedAddress + reservedLength);
+         }
+ 
+-        KernelMemoryCompatExports.RegisterReservedVirtualRange(mappedAddress, length);
++        KernelMemoryCompatExports.RegisterReservedVirtualRange(mappedAddress, reservedLength);
+         return (int)OrbisGen2Result.ORBIS_GEN2_OK;
+     }
+ 
+diff --git a/src/SharpEmu.Libs/Kernel/KernelVirtualRangeFallback.cs b/src/SharpEmu.Libs/Kernel/KernelVirtualRangeFallback.cs
+new file mode 100644
+index 0000000..1db4239
+--- /dev/null
++++ b/src/SharpEmu.Libs/Kernel/KernelVirtualRangeFallback.cs
+@@ -0,0 +1,63 @@
++// Copyright (C) 2026 SharpEmu Emulator Project
++// SPDX-License-Identifier: GPL-2.0-or-later
++
++namespace SharpEmu.Libs.Kernel;
++
++/// <summary>
++/// What sceKernelReserveVirtualRange does when the host cannot hold the whole range it was asked for.
++/// </summary>
++/// <remarks>
++/// <para>
++/// A reservation is a claim on address space, not on memory: what a title later maps inside it is
++/// backed when it is touched. Some 64-bit titles claim all of a 39-bit space at once (Unreal Engine's
++/// allocator pool reserves 512 GiB), which a host with a 39-bit address space of its own -- Android --
++/// can never give, at any address, however little of it is used.
++/// </para>
++/// <para>
++/// Refusing leaves the title holding no pool, and it does not check: it dereferences null a moment
++/// later. Giving the largest share the host can hold lets it carry on, and it only meets the limit if it
++/// maps past it.
++/// </para>
++/// </remarks>
++internal static class KernelVirtualRangeFallback
++{
++    /// <summary>Below this a reservation is not worth handing back in place of the one asked for.</summary>
++    public const ulong MinimumReservation = 0x4000_0000UL; // 1 GiB
++
++    /// <summary>Reserves <paramref name="length"/> bytes, wherever <see cref="TryReserveLargestFit"/> decides to ask.</summary>
++    public delegate bool Reserver(ulong length, out ulong mappedAddress);
++
++    /// <summary>
++    /// Tries successively smaller reservations -- half the length, then a quarter, and so on, each kept
++    /// a multiple of <paramref name="alignment"/> -- until one is granted or the next would be smaller
++    /// than <see cref="MinimumReservation"/>. The length that was asked for is not tried: the caller
++    /// has already been refused it.
++    /// </summary>
++    public static bool TryReserveLargestFit(
++        ulong length,
++        ulong alignment,
++        Reserver reserve,
++        out ulong mappedAddress,
++        out ulong reservedLength)
++    {
++        mappedAddress = 0;
++        reservedLength = 0;
++        var step = alignment == 0 ? 1UL : alignment;
++        var attempt = length;
++        while (true)
++        {
++            attempt = attempt / 2 / step * step;
++            if (attempt < MinimumReservation)
++            {
++                return false;
++            }
++
++            if (reserve(attempt, out var granted) && granted != 0)
++            {
++                mappedAddress = granted;
++                reservedLength = attempt;
++                return true;
++            }
++        }
++    }
++}
