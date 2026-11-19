@@ -92,6 +92,13 @@ jobs:
           test -d "$BUILD_DIR/plugins"
           echo "SHARPEMU_BUILD_DIR=$GITHUB_WORKSPACE/sharpdroid/$BUILD_DIR" >> "$GITHUB_ENV"
           echo "Packaged SharpEmu payload: $BUILD_DIR"
+      - name: Make Gradle wrapper executable
+        working-directory: sharpdroid
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x gradlew
+          test -x gradlew
       - name: Build the complete Android APK
         working-directory: sharpdroid
         shell: bash
@@ -109,3 +116,4 @@ jobs:
           path: ${{ env.APK_PATH }}
           if-no-files-found: error
           retention-days: 30
+ 
